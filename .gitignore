@@ -1,0 +1,10 @@
+.pixi/
+__pycache__/
+*.pyc
+.env*
+!.env.example
+pdp/store/decisions.jsonl
+pdp/store/resources.json
+*.p8
+.cache/
+pdp/store/decisions.shipped

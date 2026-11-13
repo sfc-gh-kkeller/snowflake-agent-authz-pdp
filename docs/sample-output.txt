@@ -1,0 +1,155 @@
+{'status': 'ok', 'policy_hash': '65c3e4d6cb93785c', 'columns': 14, 'row_scopes': 6}
+───────────────────────────────────────── 1. Autonomous agent (workload identity) - Fraud Sentinel ─────────────────────────────────────────
+Entra client credentials -> SERVICE_AGENT user. Cedar: own ceiling (sensitivity <= 2), all its regions.
+┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┓
+┃ column     ┃ PDP decision ┃
+┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━┩
+│ TXN_ID     │ PERMIT       │
+│ AMOUNT     │ PERMIT       │
+│ MERCHANT   │ PERMIT       │
+│ FRAUD_FLAG │ PERMIT       │
+└────────────┴──────────────┘
+row scopes permitted: ['IE', 'NL', 'UK']
+rows returned (first 3): ['TXN_ID', 'AMOUNT', 'MERCHANT', 'FRAUD_FLAG']
+  ('T0002595', Decimal('373.09'), 'Albert Heijn', False)
+  ('T0002601', Decimal('1834.95'), 'Tesco', False)
+  ('T0002609', Decimal('3556.35'), 'Tesco', False)
+
+Requesting a RESTRICTED column (IBAN, sensitivity 3):
+┏━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┓
+┃ column      ┃ PDP decision ┃
+┡━━━━━━━━━━━━━╇━━━━━━━━━━━━━━┩
+│ CUSTOMER_ID │ PERMIT       │
+│ IBAN        │ DENY         │
+│ RISK_SCORE  │ PERMIT       │
+└─────────────┴──────────────┘
+row scopes permitted: ['IE', 'NL', 'UK']
+rows returned (first 3): ['CUSTOMER_ID', 'RISK_SCORE']
+  ('C00001', 64)
+  ('C00003', 84)
+  ('C00008', 4)
+─────────────────────────────────────── 2. Delegated agent (on behalf of a human) - Advisor Copilot ────────────────────────────────────────
+Entra On-Behalf-Of: token carries agent appid + human upn. Access = agent ceiling AND human clearance.
+a) KYC review without human approval (EU AI Act Art. 14, high-risk agent):
+┏━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┓
+┃ column        ┃ PDP decision ┃
+┡━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━┩
+│ CUSTOMER_ID   │ PERMIT       │
+│ FULL_NAME     │ DENY         │
+│ DATE_OF_BIRTH │ DENY         │
+│ SEGMENT       │ PERMIT       │
+└───────────────┴──────────────┘
+row scopes permitted: ['UK']
+rows returned (first 3): ['CUSTOMER_ID', 'SEGMENT']
+  ('C00000', 'PREMIER')
+  ('C00002', 'PRIVATE')
+  ('C00004', 'RETAIL')
+b) same request, human approval recorded:
+┏━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┓
+┃ column        ┃ PDP decision ┃
+┡━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━┩
+│ CUSTOMER_ID   │ PERMIT       │
+│ FULL_NAME     │ PERMIT       │
+│ DATE_OF_BIRTH │ PERMIT       │
+│ SEGMENT       │ PERMIT       │
+└───────────────┴──────────────┘
+row scopes permitted: ['UK']
+rows returned (first 3): ['CUSTOMER_ID', 'FULL_NAME', 'DATE_OF_BIRTH', 'SEGMENT']
+  ('C00000', 'Fenna Walsh', datetime.date(2006, 9, 8), 'PREMIER')
+  ('C00002', 'Liam Jones', datetime.date(1957, 4, 15), 'PRIVATE')
+  ('C00004', 'Jack Kelly', datetime.date(1988, 1, 21), 'RETAIL')
+c) purpose 'customer_service' asks for DATE_OF_BIRTH (purpose limitation):
+┏━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┓
+┃ column        ┃ PDP decision ┃
+┡━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━┩
+│ CUSTOMER_ID   │ PERMIT       │
+│ EMAIL         │ PERMIT       │
+│ DATE_OF_BIRTH │ DENY         │
+└───────────────┴──────────────┘
+row scopes permitted: ['UK']
+rows returned (first 3): ['CUSTOMER_ID', 'EMAIL']
+  ('C00000', 'cust0@example.com')
+  ('C00002', 'cust2@example.com')
+  ('C00004', 'cust4@example.com')
+──────────────────────────────────────────── 3. Gateway asks for one thing, agent queries more ─────────────────────────────────────────────
+Snowflake only reveals what the PDP permitted for THIS session (decision grants via Horizon policies).
+direct SQL: SELECT CUSTOMER_ID, SEGMENT, FULL_NAME, IBAN, REGION FROM CUSTOMERS LIMIT 3
+  -> 3 rows ['CUSTOMER_ID', 'SEGMENT', 'FULL_NAME', 'IBAN', 'REGION']
+  ('C00000', 'PREMIER', '***PDP-DENIED***', '***PDP-DENIED***', 'UK')
+  ('C00002', 'PRIVATE', '***PDP-DENIED***', '***PDP-DENIED***', 'UK')
+  ('C00004', 'RETAIL', '***PDP-DENIED***', '***PDP-DENIED***', 'UK')
+────────────────────────────────────────────────── 4. Agent bypasses the gateway entirely ──────────────────────────────────────────────────
+A valid Entra token, a fresh session, no PDP decision -> agent-aware policies return nothing.
+direct SQL: SELECT * FROM TRANSACTIONS LIMIT 5
+  -> 0 rows ['TXN_ID', 'CUSTOMER_ID', 'AMOUNT', 'CURRENCY', 'MERCHANT', 'TXN_TS', 'REGION', 'FRAUD_FLAG']
+───────────────────────────────────────────────────────── 5. Registry kill switch ──────────────────────────────────────────────────────────
+Unapproved agent is denied everywhere; approval can be revoked live (DORA ICT incident response).
+┏━━━━━━━━━┳━━━━━━━━━━━━━━┓
+┃ column  ┃ PDP decision ┃
+┡━━━━━━━━━╇━━━━━━━━━━━━━━┩
+│ SEGMENT │ DENY         │
+└─────────┴──────────────┘
+row scopes permitted: none
+fraud-sentinel revoked in the PDP:
+┏━━━━━━━━┳━━━━━━━━━━━━━━┓
+┃ column ┃ PDP decision ┃
+┡━━━━━━━━╇━━━━━━━━━━━━━━┩
+│ TXN_ID │ DENY         │
+│ AMOUNT │ DENY         │
+└────────┴──────────────┘
+row scopes permitted: none
+──────────────────────────────────────────────── 6. Fail closed when the PDP is unavailable ────────────────────────────────────────────────
+Gateway refuses to run; Snowflake masks even previously granted data once the heartbeat is stale.
+gateway: FailClosed PDP unreachable: [Errno 61] Connection refused
+direct SQL: SELECT TXN_ID, AMOUNT FROM TRANSACTIONS LIMIT 2
+  -> 2 rows ['TXN_ID', 'AMOUNT']
+  ('T0002595', Decimal('373.09'))
+  ('T0002601', Decimal('1834.95'))
+PDP heartbeat stale (simulated outage):
+direct SQL: SELECT TXN_ID, AMOUNT FROM TRANSACTIONS LIMIT 2
+  -> 0 rows ['TXN_ID', 'AMOUNT']
+──────────────────────────────────────────── 7. Bulk exfiltration brake (Data Movement Policy) ─────────────────────────────────────────────
+Independent of the PDP: agents cannot pull more than 200 classified rows per statement.
+blocked by Snowflake: 100168 (P0000): Data movement policy triggered. Contact your administrator for details.
+───────────────────────────────────────────────────────── 8. Humans are unaffected ─────────────────────────────────────────────────────────
+The same user, without an agent, gets normal RBAC (policies only act on agent sessions).
+[('C00001', 'Aoife Taylor', 'GB33DEMO00000058076508', 'NL'), ('C00003', 'Aoife Kelly', 'GB25DEMO00000060871390', 'NL')]
+────────────────────────────────── 9. Audit evidence: PDP decision log joined to Snowflake query history ───────────────────────────────────
+Every agent query carries the PDP batch ids; decisions are shipped to Snowflake with the policy hash.
+┏━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━┓
+┃ query_id           ┃ user               ┃ role               ┃ agent           ┃ permits ┃ denies ┃ cedar policies    ┃ policy hash      ┃
+┡━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━┩
+│ 01c8621b-0109-6f2… │ FRAUD_SENTINEL_AG… │ AGENT_FRAUD_SENTI… │ fraud-sentinel  │ 5       │ 0      │ [                 │ 65c3e4d6cb93785c │
+│                    │                    │                    │                 │         │        │   "autonomous-co… │                  │
+│                    │                    │                    │                 │         │        │   "autonomous-ro… │                  │
+│                    │                    │                    │                 │         │        │ ]                 │                  │
+│ 01c8621b-0109-708… │ FRAUD_SENTINEL_AG… │ AGENT_FRAUD_SENTI… │ fraud-sentinel  │ 5       │ 1      │ [                 │ 65c3e4d6cb93785c │
+│                    │                    │                    │                 │         │        │   "autonomous-co… │                  │
+│                    │                    │                    │                 │         │        │   "autonomous-ro… │                  │
+│                    │                    │                    │                 │         │        │ ]                 │                  │
+│ 01c8621b-0109-6e1… │ FRAUD_SENTINEL_AG… │ AGENT_FRAUD_SENTI… │ fraud-sentinel  │ 5       │ 0      │ [                 │ 65c3e4d6cb93785c │
+│                    │                    │                    │                 │         │        │   "autonomous-co… │                  │
+│                    │                    │                    │                 │         │        │   "autonomous-ro… │                  │
+│                    │                    │                    │                 │         │        │ ]                 │                  │
+│ 01c8621b-0109-6f4… │ FRAUD_SENTINEL_AG… │ AGENT_FRAUD_SENTI… │ fraud-sentinel  │ 5       │ 0      │ [                 │ 65c3e4d6cb93785c │
+│                    │                    │                    │                 │         │        │   "autonomous-co… │                  │
+│                    │                    │                    │                 │         │        │   "autonomous-ro… │                  │
+│                    │                    │                    │                 │         │        │ ]                 │                  │
+│ 01c8621b-0109-6f2… │ FRAUD_SENTINEL_AG… │ AGENT_FRAUD_SENTI… │ fraud-sentinel  │ 5       │ 0      │ [                 │ 65c3e4d6cb93785c │
+│                    │                    │                    │                 │         │        │   "autonomous-co… │                  │
+│                    │                    │                    │                 │         │        │   "autonomous-ro… │                  │
+│                    │                    │                    │                 │         │        │ ]                 │                  │
+│ 01c8621b-0109-708… │ DEMO_USER             │ AGENT_ADVISOR_COP… │ advisor-copilot │ 3       │ 2      │ [                 │ 65c3e4d6cb93785c │
+│                    │                    │                    │                 │         │        │   "delegated-row… │                  │
+│                    │                    │                    │                 │         │        │   "delegated-col… │                  │
+│                    │                    │                    │                 │         │        │ ]                 │                  │
+│ 01c8621b-0109-6f2… │ DEMO_USER             │ AGENT_ADVISOR_COP… │ advisor-copilot │ 3       │ 2      │ [                 │ 65c3e4d6cb93785c │
+│                    │                    │                    │                 │         │        │   "delegated-row… │                  │
+│                    │                    │                    │                 │         │        │   "delegated-col… │                  │
+│                    │                    │                    │                 │         │        │ ]                 │                  │
+│ 01c8621b-0109-6e1… │ DEMO_USER             │ AGENT_ADVISOR_COP… │ advisor-copilot │ 3       │ 3      │ [                 │ 65c3e4d6cb93785c │
+│                    │                    │                    │                 │         │        │   "purpose-limit… │                  │
+│                    │                    │                    │                 │         │        │   "delegated-row… │                  │
+│                    │                    │                    │                 │         │        │   "delegated-col… │                  │
+│                    │                    │                    │                 │         │        │ ]                 │                  │
+└────────────────────┴────────────────────┴────────────────────┴─────────────────┴─────────┴────────┴───────────────────┴──────────────────┘

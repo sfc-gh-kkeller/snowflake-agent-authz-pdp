@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Agent PDP console - Cedar + AuthZEN + Snowflake</title>
+<style>
+  :root { --bg:#0b1220; --panel:#121b2e; --line:#22304d; --txt:#dbe5f5; --dim:#8a9ab8;
+          --ok:#3ecf8e; --no:#ff5d6c; --acc:#29b5e8; --warn:#f5b84b; }
+  * { box-sizing:border-box }
+  body { margin:0; font:14px/1.45 -apple-system,Segoe UI,Inter,sans-serif; background:var(--bg); color:var(--txt) }
+  header { display:flex; align-items:center; gap:18px; padding:14px 22px; border-bottom:1px solid var(--line) }
+  header h1 { font-size:18px; margin:0 }
+  header .flow { color:var(--dim); font-size:13px }
+  header .hash { margin-left:auto; font-family:ui-monospace,Menlo,monospace; color:var(--acc) }
+  main { display:grid; grid-template-columns: 380px minmax(0,1fr); gap:16px; padding:16px 22px }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin-bottom:16px }
+  .panel h2 { font-size:13px; text-transform:uppercase; letter-spacing:.08em; color:var(--dim); margin:0 0 10px }
+  .agent { display:flex; align-items:center; gap:10px; padding:8px 0; border-top:1px solid var(--line) }
+  .agent:first-of-type { border-top:0 }
+  .agent .name { font-weight:600 }
+  .agent .meta { color:var(--dim); font-size:12px }
+  .pill { font-size:11px; padding:2px 8px; border-radius:20px; border:1px solid var(--line); color:var(--dim) }
+  .pill.high { color:var(--warn); border-color:var(--warn) }
+  .switch { margin-left:auto; cursor:pointer; padding:4px 10px; border-radius:6px; border:0; font-weight:600 }
+  .switch.on { background:var(--ok); color:#06281b } .switch.off { background:var(--no); color:#2b0509 }
+  .scen { display:block; width:100%; text-align:left; background:#16223a; color:var(--txt); border:1px solid var(--line);
+          border-radius:8px; padding:8px 10px; margin:6px 0; cursor:pointer; font-size:13px }
+  .scen:hover { border-color:var(--acc) } .scen b { color:var(--acc); margin-right:6px }
+  pre { background:#070d18; border:1px solid var(--line); border-radius:8px; padding:12px; margin:0;
+        font:12px/1.4 ui-monospace,Menlo,monospace; white-space:pre; overflow:auto; max-height:520px }
+  table { width:100%; border-collapse:collapse; font-size:12.5px }
+  th { text-align:left; color:var(--dim); font-weight:500; padding:6px 8px; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--panel) }
+  td { padding:5px 8px; border-bottom:1px solid #18233b; white-space:nowrap }
+  td:last-child { white-space:normal }
+  td.mono { font-family:ui-monospace,Menlo,monospace; font-size:12px }
+  .permit { color:var(--ok); font-weight:700 } .deny { color:var(--no); font-weight:700 }
+  .scroll { max-height:640px; overflow:auto }
+  .stats { display:flex; gap:12px; margin-bottom:10px }
+  .stat { flex:1; background:#16223a; border:1px solid var(--line); border-radius:8px; padding:8px 12px }
+  .stat .v { font-size:22px; font-weight:700 } .stat .l { color:var(--dim); font-size:12px }
+  .new { animation: flash 1.2s ease-out }
+  @keyframes flash { from { background:#1d3557 } to { background:transparent } }
+  .running { color:var(--warn) }
+</style>
+</head>
+<body>
+<header>
+  <h1>Agent PDP console</h1>
+  <span class="flow">Entra ID &rarr; Agent gateway (PEP) &rarr; <b>AuthZEN 1.0</b> &rarr; <b>Cedar</b> PDP &rarr; decision grants &rarr; Snowflake Horizon policies</span>
+  <span class="hash" id="hash"></span>
+</header>
+<main>
+  <div>
+    <div class="panel">
+      <h2>Agent registry (PDP = system of record)</h2>
+      <div id="agents"></div>
+    </div>
+    <div class="panel">
+      <h2>Scenarios (real Entra tokens, real Snowflake)</h2>
+      <div id="scenarios"></div>
+    </div>
+  </div>
+  <div>
+    <div class="panel">
+      <h2>Scenario output <span id="status"></span></h2>
+      <pre id="out">Pick a scenario on the left.</pre>
+    </div>
+    <div class="panel">
+      <h2>Live AuthZEN decisions</h2>
+      <div class="stats">
+        <div class="stat"><div class="v" id="nPermit">0</div><div class="l">permits (last 60)</div></div>
+        <div class="stat"><div class="v" id="nDeny">0</div><div class="l">denies (last 60)</div></div>
+        <div class="stat"><div class="v" id="nCols">0</div><div class="l">columns harvested from Horizon</div></div>
+        <div class="stat"><div class="v" id="nRows">0</div><div class="l">row scopes</div></div>
+      </div>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>time (UTC)</th><th>agent</th><th>mode</th><th>on behalf of</th><th>action</th>
+            <th>resource</th><th>purpose</th><th>approval</th><th>decision</th><th>Cedar policies</th></tr></thead>
+          <tbody id="log"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</main>
+<script>
+const seen = new Set();
+// ?redact=1 masks the demo identities (for screenshots / screen sharing)
+const REDACT = new URLSearchParams(location.search).has("redact");
+let TERMS = [];
+const red = s => { s = String(s ?? ""); if (!REDACT) return s;
+  for (const t of TERMS) s = s.split(t).join(t.includes("@") ? "rm.user@bank.example" : (t === t.toUpperCase() ? "RM_USER" : "rm.user"));
+  return s; };
+const esc = s => red(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+async function refresh() {
+  const s = await (await fetch("/console/api/state")).json();
+  TERMS = s.redact_terms || [];
+  document.getElementById("hash").textContent = "policy set " + s.policy_hash;
+  document.getElementById("nCols").textContent = s.resources.columns.length;
+  document.getElementById("nRows").textContent = s.resources.row_scopes.length;
+  document.getElementById("agents").innerHTML = Object.entries(s.agents).map(([k, a]) => `
+    <div class="agent">
+      <div><div class="name">${esc(a.display_name)}</div>
+      <div class="meta">${esc(a.mode)} &middot; max sensitivity ${esc(a.max_sensitivity)} &middot; ${esc((a.regions||[]).join(", "))}<br>
+      purposes: ${esc((a.purposes||[]).join(", "))}</div></div>
+      <span class="pill ${a.risk_tier === "high" ? "high" : ""}">AI Act: ${esc(a.risk_tier)}</span>
+      <button class="switch ${a.approved ? "on" : "off"}" onclick="toggle('${esc(k)}', ${!a.approved})">${a.approved ? "approved" : "revoked"}</button>
+    </div>`).join("");
+  if (!document.getElementById("scenarios").innerHTML) {
+    document.getElementById("scenarios").innerHTML = Object.entries(s.scenarios).map(([n, t]) =>
+      `<button class="scen" onclick="run(${n})"><b>${n}</b>${esc(t)}</button>`).join("");
+  }
+  let p = 0, d = 0;
+  document.getElementById("log").innerHTML = s.decisions.map(x => {
+    x.decision ? p++ : d++;
+    const fresh = !seen.has(x.decision_id); seen.add(x.decision_id);
+    return `<tr class="${fresh && seen.size > s.decisions.length ? "new" : ""}">
+      <td class="mono">${esc(x.ts.slice(11, 19))}</td><td>${esc(x.agent)}</td><td>${esc(x.agent_mode)}</td>
+      <td>${esc(x.on_behalf_of ? x.on_behalf_of.split("@")[0] : "-")}</td><td class="mono">${esc(x.action)}</td>
+      <td class="mono">${esc(x.resource_id)}</td><td>${esc(x.purpose || "-")}</td>
+      <td>${x.human_approval ? "yes" : "-"}</td>
+      <td class="${x.decision ? "permit" : "deny"}">${x.decision ? "PERMIT" : "DENY"}</td>
+      <td class="mono">${esc((x.determining_policies || []).join(", ") || "default deny")}</td></tr>`;
+  }).join("");
+  document.getElementById("nPermit").textContent = p;
+  document.getElementById("nDeny").textContent = d;
+}
+
+async function toggle(name, value) {
+  await fetch(`/console/api/agents/${name}/approved/${value}`, {method: "POST"});
+  refresh();
+}
+
+async function run(n) {
+  const st = document.getElementById("status");
+  st.innerHTML = `<span class="running">&middot; running scenario ${n}...</span>`;
+  document.getElementById("out").textContent = "";
+  const r = await (await fetch(`/console/api/run/${n}`, {method: "POST"})).json();
+  document.getElementById("out").textContent = red(r.output);
+  st.textContent = r.ok ? `· scenario ${n} done` : `· scenario ${n} failed`;
+  refresh();
+}
+
+refresh(); setInterval(refresh, 2000);
+</script>
+</body>
+</html>

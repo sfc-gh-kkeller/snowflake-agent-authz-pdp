@@ -1,0 +1,69 @@
+# =====================================================================
+# PDP system of record: the agent registry and human entitlements.
+#
+# In production this would live in the PDP's own store (or be fed from
+# the bank's IGA / HR systems).  Here it is a YAML file so the demo stays
+# readable.  `entra_app_id` values are filled in by entra/setup.sh.
+#
+# Column / row-scope resources are NOT maintained here: they are
+# harvested from Snowflake Horizon classification tags by
+# sync/horizon_to_pdp.py, so data owners classify once, in Snowflake.
+# =====================================================================
+
+agents:
+  # A copilot that a relationship manager uses. Acts ON BEHALF OF the user
+  # (Entra On-Behalf-Of flow). High-risk under the EU AI Act because it
+  # supports decisions about natural persons -> human oversight required.
+  advisor-copilot:
+    display_name: Advisor Copilot
+    mode: delegated
+    approved: true
+    risk_tier: high
+    snowflake_role: AGENT_ADVISOR_COPILOT
+    tables: [CUSTOMERS, TRANSACTIONS]
+    max_sensitivity: 3
+    purposes: [customer_service, kyc_review]
+    regions: [UK, IE]
+    owner: retail-banking-ai@example.com
+    ict_third_party: none            # DORA Art. 28 register of information
+
+  # An autonomous fraud-screening workload. No human in the loop at run
+  # time, acts under its OWN identity (Entra client-credentials).
+  fraud-sentinel:
+    display_name: Fraud Sentinel
+    mode: autonomous
+    approved: true
+    risk_tier: limited
+    snowflake_role: AGENT_FRAUD_SENTINEL
+    tables: [TRANSACTIONS, CUSTOMERS]
+    max_sensitivity: 2
+    purposes: [fraud_detection]
+    regions: [UK, IE, NL]
+    owner: financial-crime-ai@example.com
+    ict_third_party: none
+
+  # Registered but NOT approved: shows the registry kill switch.
+  marketing-genie:
+    display_name: Marketing Genie
+    mode: autonomous
+    approved: false
+    risk_tier: minimal
+    snowflake_role: AGENT_MARKETING_GENIE
+    tables: [CUSTOMERS]
+    max_sensitivity: 1
+    purposes: [marketing]
+    regions: [UK]
+    owner: marketing@example.com
+    ict_third_party: ExampleMarTech Ltd
+
+# Human clearances (in production: sourced from IGA, e.g. SailPoint /
+# Entra ID Governance).  Keys are Entra UPNs (lower-case).
+humans:
+  "{{DEMO_USER_UPN}}":
+    display_name: Demo Relationship Manager
+    clearance: 3
+    regions: [UK]
+  "alex.rm@example.com":
+    display_name: Second RM (offline test only)
+    clearance: 1
+    regions: [IE]

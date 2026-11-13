@@ -1,0 +1,30 @@
+[workspace]
+name = "snowflake-agent-authz"
+channels = ["conda-forge"]
+platforms = ["osx-arm64", "linux-64", "osx-64"]
+
+[dependencies]
+python = "3.12.*"
+fastapi = "*"
+uvicorn = "*"
+httpx = "*"
+pyjwt = "*"
+cryptography = "*"
+msal = "*"
+pyyaml = "*"
+rich = "*"
+pytest = ">=9.2.0,<10"
+
+[pypi-dependencies]
+cedarpy = "*"
+snowflake-connector-python = "*"
+
+[tasks]
+test = "python -m pytest -q tests"
+entra-setup = "python entra/setup.py"
+sf-deploy = "python sf/deploy.py"
+pdp = "python pdp/run.py"
+sync-horizon = "python sync/horizon_to_pdp.py"
+demo = "python demo/run_demo.py"
+sf-teardown = "python sf/deploy.py sf/99_teardown.sql"
+entra-teardown = "python entra/teardown.py"
